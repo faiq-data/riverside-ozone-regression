@@ -1,0 +1,584 @@
+---
+title: "Predicting Air Quality: A Statistical Analysis of Environmental Factors Influencing Ground-Level Ozone in Riverside"
+author: "Muhammad Faiq"
+date: "2026-04-16"
+output:
+  pdf_document: default
+  html_document: default
+header-includes:
+  - \usepackage{booktabs}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center")
+```
+
+## Introduction
+
+Ground-level ozone is an important air quality indicator that can be severely affected by climatic conditions in the area. In this coursework, we use statistical methods on data set of Riverside (`riverside_air.csv`) and develop a predictive model of Ozone. The data set consists of 60 observations of four variables where Ozone (a response variable) and three possible predictor variables (Temperature, Wind Speed and Solar Radiation). The analysis is performed through four major stages:Initial Data Exploration, Correlation Analysis, Model Selection, and Final Model Interpretation.
+
+---
+
+# Part 1: Initial Data Exploration (EDA)
+
+## (a) Importing the Dataset
+
+The dataset is imported into R using `read.csv()` and stored in a data frame named `air`. The `tidyverse`, `ggplot2`, and `GGally` libraries are loaded for data manipulation, visualisation, and pairwise plotting.
+
+```{r part1a}
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+library(knitr)
+
+air <- read.csv("riverside_air.csv")
+
+# Ensure Solar_Radiation is numeric
+air$Solar_Radiation <- as.numeric(air$Solar_Radiation)
+
+# Display first few rows to confirm successful import
+head(air, 5)
+```
+
+---
+
+## (b) Summary Statistics and Data Structure
+
+Before proceeding with any modelling, it is essential to understand the structure and characteristics of the data. We begin by checking for missing values and duplicates, then examine summary statistics and the data structure.
+
+```{r part1b}
+# Check for missing values and duplicates
+cat("Missing values per column:\n")
+colSums(is.na(air))
+
+cat("\nAny duplicate rows:", any(duplicated(air)), "\n")
+```
+
+There are no missing values or duplicate observations, confirming that the dataset is complete and suitable for analysis.
+
+```{r part1b_summary}
+# Summary statistics
+summary(air)
+
+# Data structure
+str(air)
+```
+
+The `str()` function confirms that the dataset contains 60 observations and 5 variables: `Day`, `Ozone`, `Temperature`, `Wind_Speed`, and `Solar_Radiation`. All variables are numeric, which is the appropriate format for the statistical analyses that follow.
+
+```{r part1b_ozone_stats}
+# Compute key statistics for Ozone
+mean_ozone <- mean(air$Ozone)
+median_ozone <- median(air$Ozone)
+range_ozone <- diff(range(air$Ozone))
+min_ozone <- min(air$Ozone)
+max_ozone <- max(air$Ozone)
+
+cat("Ozone - Mean:", round(mean_ozone, 2), "\n")
+cat("Ozone - Median:", round(median_ozone, 2), "\n")
+cat("Ozone - Range:", round(min_ozone, 2), "to", round(max_ozone, 2),
+    "(spread of", round(range_ozone, 2), ")\n")
+```
+
+The mean ozone concentration is `r round(mean_ozone, 2)`, the median is `r round(median_ozone, 2)`, and the values range from `r round(min_ozone, 2)` to `r round(max_ozone, 2)` (a spread of `r round(range_ozone, 2)`). The mean is greater than the median, indicating that the distribution is positively skewed slightly, indicating that few relatively large ozone readings are pushing the mean upwards. The wide range implies a considerable variability over the 60 days.
+
+**Identification of Potential Outliers:**
+
+To systematically identify potential outliers, we apply the Interquartile Range (IQR) method, where values below $Q_1 - 1.5 \times IQR$ or above $Q_3 + 1.5 \times IQR$ are flagged.
+
+```{r part1b_outliers}
+# IQR-based outlier detection function
+detect_outliers <- function(data, var_name) {
+  x <- data[[var_name]]
+  Q1 <- quantile(x, 0.25)
+  Q3 <- quantile(x, 0.75)
+  IQR_val <- IQR(x)
+  lower <- Q1 - 1.5 * IQR_val
+  upper <- Q3 + 1.5 * IQR_val
+  
+  outlier_rows <- data[x < lower | x > upper, c("Day", var_name)]
+  
+  list(
+    variable = var_name,
+    lower_bound = round(as.numeric(lower), 2),
+    upper_bound = round(as.numeric(upper), 2),
+    outliers = outlier_rows
+  )
+}
+
+# Check all predictor variables and response
+vars_to_check <- c("Ozone", "Temperature", "Wind_Speed", "Solar_Radiation")
+outlier_results <- lapply(vars_to_check, function(v) detect_outliers(air, v))
+
+# Display results
+for (res in outlier_results) {
+  cat("\n", res$variable, "- Bounds: [", res$lower_bound, ",", res$upper_bound, "]\n")
+  if (nrow(res$outliers) > 0) {
+    cat("  Outlier(s) found:\n")
+    print(res$outliers)
+  } else {
+    cat("  No outliers detected.\n")
+  }
+}
+```
+
+```{r part1b_outlier_table}
+# Create a summary table for outlier analysis
+outlier_summary <- data.frame(
+  Variable = c("Ozone", "Temperature", "Wind Speed", "Solar Radiation"),
+  Lower_Bound = sapply(outlier_results, function(r) r$lower_bound),
+  Upper_Bound = sapply(outlier_results, function(r) r$upper_bound),
+  Outlier_Day = c("11", "15", "None", "None"),
+  Outlier_Value = c("96.1", "48.8", "---", "---")
+)
+
+kable(outlier_summary, 
+      col.names = c("Variable", "Lower Bound", "Upper Bound", "Day", "Value"),
+      caption = "Table 1: IQR Bounds and Identified Potential Outliers",
+      align = "c")
+```
+
+According to IQR approach, there are two possible outliers. **Ozone on Day 11** has a value of 96.1, that is greater than the upper value of 92.78 thus a possible upper outlier. **Temperature on Day 15** has a value of 48.8, which is less than the lower bound of 55.12, thus it is a possible lower outlier. No Wind Speed or Solar Radiation had outliers since all of their values are within the IQR-based value bounds. These would be potential outliers which would be looked at in further analyses, as they can have a disproportionate effect on correlation and regression estimates. However, as they appear to be real measurements rather than data entry errors, they are kept in the dataset.
+
+
+---
+
+## (c) Distribution of Ozone and Temperature
+
+To understand the distributional characteristics of the key variables, we create a histogram for Ozone and a boxplot for Temperature.
+
+```{r part1c_histogram, fig.cap=" Histogram of Ozone concentration showing the distribution over the 60-day period."}
+ggplot(air, aes(x = Ozone)) +
+  geom_histogram(binwidth = 10, fill = "steelblue", color = "black", alpha = 0.8) +
+  labs(
+    title = "Distribution of Ozone Concentration",
+    x = "Ozone Concentration",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+The histogram indicates that Ozone distribution is skewed towards the **right (positively skewed)**. The majority of the observed values are concentrated in the lower middle range (around 50 to 70), with some higher values prolonging the right tail of the distribution. This is in agreement with the previous finding that the mean (`r round(mean_ozone, 2)`) is bigger than the median (`r round(median_ozone, 2)`), which is a typical quality of a positive skewness. The skew to the right indicates that on the majority of days, the level of ozone is moderate, but there are days when there are significantly high levels of this gas, which might be of special interest in planning of the population health.
+
+
+```{r part1c_boxplot, fig.cap=" Boxplot of Temperature showing spread and potential outliers."}
+ggplot(air, aes(y = Temperature)) +
+  geom_boxplot(fill = "lightcoral", color = "black", outlier.color = "red",
+               outlier.size = 3, width = 0.3) +
+  labs(
+    title = "Boxplot of Temperature",
+    y = "Temperature (F)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+This boxplot of Temperature indicates that the distribution is relatively concentrated, with the middle half of the observations lying in a fairly narrow interval between the 25th and 75th percentiles (about 69.8F to 79.5F), around a median of about 74.4F. A clear lower outlier (shown in red) lies below the lower whisker: **Day 15, with a temperature of 48.8F**. This is a relatively cold day as compared to the rest of the dataset. With the exception of this one outlier, the boxplot shows that the temperature levels did not vary much during the 60 days of monitoring period, about half of the values being in the region of about 70F to 80F.
+
+
+---
+
+## (d) Scatterplot Matrix
+
+A scatterplot matrix is produced using `ggpairs()` to examine pairwise relationships between Ozone and all three predictor variables simultaneously.
+
+```{r part1d, fig.width=8, fig.height=7, fig.cap=" Scatterplot matrix showing pairwise relationships between Ozone, Temperature, Wind Speed, and Solar Radiation."}
+air %>%
+  select(Ozone, Temperature, Wind_Speed, Solar_Radiation) %>%
+  ggpairs(
+    title = "Scatterplot Matrix of Ozone and Environmental Factors",
+    upper = list(continuous = wrap("cor", size = 4)),
+    lower = list(continuous = wrap("smooth", alpha = 0.5, size = 0.8))
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+Based on the scatterplot matrix:
+
+- **Temperature** seems to be **the most linear related to Ozone**. The scatterplot in the Temperature-Ozone panel depicts an evident **positive linear tendency**, in which the data points are grouped relatively closely around an upward-sloping trend. As temperature increases, the concentration of ozone also tends to grow, and this tendency is the most stable of all three predictors. The highest in terms of magnitude is the corresponding Pearson correlation coefficient ($r = 0.346$) which further supports this visual assessment.
+
+
+- **Solar Radiation** shows a **weak linear relationship with Ozone**. The scatterplot for this pair demonstrates well-spread data with no obvious straight-line tendency. The observations are spread out widely on the plot territory, and the general tendency can hardly be detected with the eye. While there is a low positive correlation ($r = 0.205$), the diffuse scatter implies that a linear model might not capture the association, which may exist between these two variables.
+
+- **Wind Speed** has a **weak negative correlation with Ozone**, the weakest linear association of the three predictors - higher wind speeds tend to be associated with lower ozone levels. The data points are however more scattered as compared to the Temperature-Ozone plot, with a weaker and less significant linear interaction ($r = -0.191$).
+
+---
+
+## (e) Assessing Linearity Between Ozone and Solar Radiation
+
+To investigate whether the relationship between Solar Radiation and Ozone is strictly linear, we overlay both a simple linear regression line and a LOESS (Locally Estimated Scatterplot Smoothing) curve on the same scatterplot. The LOESS method fits a flexible, non-parametric curve that adapts to local patterns in the data.
+
+```{r part1e, fig.cap=" Scatterplot of Ozone vs Solar Radiation with both linear regression and LOESS trend lines."}
+ggplot(air, aes(x = Solar_Radiation, y = Ozone)) +
+  geom_point(color = "grey40", alpha = 0.7, size = 2) +
+  geom_smooth(aes(color = "Linear Regression", linetype = "Linear Regression"),
+              method = "lm", se = FALSE, linewidth = 1) +
+  geom_smooth(aes(color = "LOESS Curve", linetype = "LOESS Curve"),
+              method = "loess", se = FALSE, linewidth = 1) +
+  scale_color_manual(NULL, values = c("Linear Regression" = "blue",
+                                       "LOESS Curve" = "red")) +
+  scale_linetype_manual(NULL, values = c("Linear Regression" = "solid",
+                                          "LOESS Curve" = "dashed")) +
+  labs(
+    title = "Ozone vs Solar Radiation: Linear vs LOESS Fit",
+    x = "Solar Radiation",
+    y = "Ozone Concentration"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "bottom",
+    legend.background = element_rect(fill = "white", colour = "grey80")
+  )
+```
+
+Solar Radiation and Ozone relationship do **not** seem to be strictly linear. While the simple linear regression line indicates a positive slope that is gentle in nature, the LOESS curve is more subtle. The LOESS curve is observed to deviate significantly in comparison with the straight regression line over varying Solar Radiation quantities:
+
+
+- At **low to moderate** Solar Radiation values (approximately 100-180) the LOESS curve begins above.then crosses the regression line and then slopes below it, indicating a region in which ozone decreases even though solar radiation is increasing
+
+- At **higher** Solar Radiation values (greater than around 200) the LOESS curve will be above the regression line, and the relationship will be more strongly positive and steeper.
+
+This pattern, where the direction and strength of the relationship change as the predictor increases, is characteristic of a **non-linear relationship**. An ordinary linear regression equation which supposes a steady rate of change, cannot pick up these local variations. This finding has important implications for model selection: a simple linear regression with Solar Radiation as a predictor might not be a proper fit, and its coefficient estimates may be misleading.
+
+
+---
+
+# Part 2: Correlation Analysis
+
+## (a) Pearson Correlation Coefficients
+
+The Pearson correlation coefficient ($r$) is computed between Ozone and each of the three predictor variables to quantify the strength and direction of their linear relationships.
+
+```{r part2a}
+cor_temp <- cor(air$Ozone, air$Temperature)
+cor_wind <- cor(air$Ozone, air$Wind_Speed)
+cor_solar <- cor(air$Ozone, air$Solar_Radiation)
+
+cor_table <- data.frame(
+  Predictor = c("Temperature", "Wind Speed", "Solar Radiation"),
+  Correlation = round(c(cor_temp, cor_wind, cor_solar), 3)
+)
+
+kable(cor_table, 
+      col.names = c("Predictor Variable", "Correlation (r)"),
+      caption = "Table 2: Pearson Correlation Coefficients between Ozone and Predictor Variables",
+      align = c("l", "r"))
+```
+
+The findings verify the visual findings by the scatterplot matrix. **Temperature** is the most strongly positively correlated to Ozone ($r = `r round(cor_temp, 3)`$), higher temperatures are related to higher ozone concentrations. The positive correlation between **Solar Radiation** ($r = `r round(cor_solar, 3)`$) is less strong, and **Wind Speed** is weakly negatively correlated ($r = `r round(cor_wind, 3)`$), with the implication that the higher the winds, the slightly lower the ozone levels.
+
+Overall, all three correlations are relatively modest in magnitude, meaning that none of the individual predictors on their own have a very strong linear association with Ozone. Nevertheless, Temperature stands out as the most promising predictor for a simple linear regression model.
+
+---
+
+## (b) Hypothesis Test for the Correlation Between Ozone and Temperature
+
+A formal Pearson correlation test is conducted to determine whether the observed linear relationship between Ozone and Temperature is statistically significant.
+
+**Hypotheses:**
+
+- $H_0$: $\rho = 0$ (there is no linear correlation between Ozone and Temperature in the population)
+- $H_a$: $\rho \neq 0$ (there is a non-zero linear correlation between Ozone and Temperature)
+
+This is a two-tailed test at the $\alpha = 0.05$ significance level. The test assumes that the two variables have a linear relationship and that both are approximately normally distributed.
+
+```{r part2b}
+cor_test_result <- cor.test(air$Ozone, air$Temperature, method = "pearson")
+cor_test_result
+```
+
+The sample correlation coefficient is $r = `r round(cor_test_result$estimate, 3)`$, indicating a positive linear association. The test statistic is $t = `r round(cor_test_result$statistic, 3)`$ with $df = `r cor_test_result$parameter`$ degrees of freedom. The corresponding **p-value is `r round(cor_test_result$p.value, 5)`**, and the **95% confidence interval** for the population correlation is (`r round(cor_test_result$conf.int[1], 3)`, `r round(cor_test_result$conf.int[2], 3)`).
+
+**Conclusion:** The p-value (`r round(cor_test_result$p.value, 5)`) does not exceed the significance level (0.05), so **we can reject the null hypothesis**. There is statistically significant evidence of a positive linear relationship between Ozone and Temperature. The confidence interval does not contain zero, which gives further evidence for this conclusion. Practically, this implies that temperature is a statistically significant predictor of ozone level.
+
+
+---
+
+## (c) Limitations of Pearson's Correlation for Ozone and Solar Radiation
+
+Pearson's Correlation has constraints on Ozone and Solar Radiation due to several factors,
+The correlation coefficient according to Pearson, is specifically used to determine the direction and strength of a linear relationship between two continuous variables. It assumes that the relationship between the variables can be adequately represented by a straight line. Assuming this linearity, Pearson r is a trustworthy overview of the connection.
+
+Nonetheless, as part 1(e) shows, the correlation between Ozone and Solar Radiation does **not** follow a strictly linear pattern. The LOESS curve showed a trending curve -- an early dip at moderate Solar Radiation levels then increased by an upturn in higher levels -- which is not parallel to the straight regression line. This non-linear behaviour implies that the linear model of Pearson r is not a good fit of the real data pattern.
+
+Therefore, the Pearson correlation ($r = `r round(cor_solar, 3)`$) is relatively low and this might be **deceptive**. A low value of r does not necessarily imply that there is a weak overall relationship between the two variables; it is just that they have a **low linear correlation**. Here the variables can be of a significant non-linear relationship that Pearson’s coefficient is unable to detect. Other methods include the rank correlation of Spearman or the visual means such as the LOESS plot would give a more comprehensive picture of the association.
+
+Relying on Pearson's r alone to summarise the relationship between Ozone and Solar Radiation would thus be **imprecise and possibly inaccurate**, since it fails to recognize the non-linear formation that is found in the data.
+
+
+---
+
+# Part 3: Simple Linear Regression Model Selection
+
+## (a) Construction of Simple Linear Regression Models
+
+Three separate simple linear regression models are fitted, each using one predictor variable to explain variation in Ozone.
+
+```{r part3a}
+model_temp <- lm(Ozone ~ Temperature, data = air)
+model_wind <- lm(Ozone ~ Wind_Speed, data = air)
+model_solar <- lm(Ozone ~ Solar_Radiation, data = air)
+
+cat("=== Model 1: Ozone ~ Temperature ===\n")
+summary(model_temp)
+
+cat("\n=== Model 2: Ozone ~ Wind Speed ===\n")
+summary(model_wind)
+
+cat("\n=== Model 3: Ozone ~ Solar Radiation ===\n")
+summary(model_solar)
+```
+
+---
+
+## (b) Comparison of Regression Models Using $R^2$ and RSE
+
+```{r part3b}
+model_comparison <- data.frame(
+  Model = c("Temperature", "Wind Speed", "Solar Radiation"),
+  R_squared = c(summary(model_temp)$r.squared,
+                summary(model_wind)$r.squared,
+                summary(model_solar)$r.squared),
+  Adj_R_squared = c(summary(model_temp)$adj.r.squared,
+                    summary(model_wind)$adj.r.squared,
+                    summary(model_solar)$adj.r.squared),
+  RSE = c(summary(model_temp)$sigma,
+          summary(model_wind)$sigma,
+          summary(model_solar)$sigma),
+  F_statistic = c(summary(model_temp)$fstatistic[1],
+                  summary(model_wind)$fstatistic[1],
+                  summary(model_solar)$fstatistic[1]),
+  P_value = c(
+    pf(summary(model_temp)$fstatistic[1], summary(model_temp)$fstatistic[2],
+       summary(model_temp)$fstatistic[3], lower.tail = FALSE),
+    pf(summary(model_wind)$fstatistic[1], summary(model_wind)$fstatistic[2],
+       summary(model_wind)$fstatistic[3], lower.tail = FALSE),
+    pf(summary(model_solar)$fstatistic[1], summary(model_solar)$fstatistic[2],
+       summary(model_solar)$fstatistic[3], lower.tail = FALSE)
+  )
+)
+
+kable(model_comparison,
+      col.names = c("Model", "R-squared", "Adjusted R-squared", "RSE", "F-statistic", "p-value"),
+      digits = c(0, 4, 4, 3, 3, 5),
+      caption = "Table 3: Comparison of Simple Linear Regression Models",
+      align = "c")
+```
+
+The $R^2$ of the Temperature model is the largest (`r round(summary(model_temp)$r.squared, 4)`), meaning that it explains the highest percentage of the variation in Ozone amongst the three candidates. It is also the **lowest RSE** (`r round(summary(model_temp)$sigma, 3)`), which implies it produces the minimal average prediction errors. Also, it is the only model that has a statistically significant F-statistic (p-value < 0.05) which proves that Temperature is a useful predictor.
+
+Conversely, Wind Speed and Solar Radiation models both have low $R^2$ values and non-significant p-values, indicating that neither of these predictors is statistically significantly related to Ozone when used alone.
+
+
+---
+
+## (c) Diagnostic Analysis of the Best Model
+
+The Temperature model, having the highest Adjusted $R^2$, is selected for detailed diagnostic analysis. The diagnostic plots examine the assumptions of linearity, constant variance (homoscedasticity), and normality of residuals.
+
+```{r part3c_resid, fig.width=10, fig.cap=" Residuals vs Fitted values (left) and Ozone vs Temperature scatterplot (right) for the Temperature model."}
+par(mfrow = c(1, 2), mar = c(5, 5, 3, 2))
+
+# Ozone vs Temperature with fitted line
+plot(air$Temperature, air$Ozone,
+     pch = 16, col = "steelblue", cex = 1.1,
+     main = "Ozone vs Temperature",
+     xlab = "Temperature (F)", ylab = "Ozone Concentration")
+abline(model_temp, col = "red", lwd = 2)
+grid(col = "gray90")
+
+# Residuals vs Fitted
+plot(model_temp, which = 1, id.n = 0,
+     col = "steelblue", pch = 16,
+     main = "Residuals vs Fitted Values",
+     caption = "", sub.caption = "")
+grid(col = "gray90")
+```
+
+**Residuals vs Fitted Plot:** There is no obvious systematic trend in the residuals vs fitted plot. The residuals in a more or less horizontal band of dots scattered along both sides of the line of zero along the full scale of fitted values, with no discernible curvature or funnel-shaped (fan) curve. This suggests that:
+
+
+- The **linearity assumption** is fairly met - the linear model seems to represent the overall trend with no systematic underfitting or overfitting anywhere.
+
+- The **constant variance (homoscedasticity) assumption** is also met with reasonable satisfaction - The spread of residuals has no significant widening or narrowing
+
+Even though some of the observations have large residuals (more in the positive direction), these are relatively few and do not form a systematic pattern that would indicate a breach of assumptions.
+
+```{r part3c_qq, fig.width=6, fig.height=5, fig.cap=" Normal Q-Q plot of residuals for the Temperature model."}
+plot(model_temp, which = 2, id.n = 0,
+     col = "steelblue", pch = 16,
+     main = "Normal Q-Q Plot of Residuals",
+     caption = "", sub.caption = "")
+grid(col = "gray90")
+```
+
+**Normal Q-Q Plot:** Q-Q plot is used to determine the normality of the residual value. If the residuals are normally distributed, the points should lie roughly along the diagonal reference line.
+
+
+In this scenario, most of the residuals are near the reference line particularly in the middle part of the distribution, meaning that the assumption of the **normality is not violated**. However, there are noticeable deviations at each extremity:
+
+
+- There are a couple of points in the **lower tail** (left side), with slightly less weight, indicating slightly less heavy tails than expected.
+- Several points were observed to be above the line of reference in the **upper tail** (right side) which shows heavier-than expected tails. This is probably caused by the possible outlier on Day 11 (Ozone = 96.1).
+
+Although these small deviations of the tail are present, the trend is fairly linear. The departures are bound to the extremes, and the mid area goes pretty well with the reference line. Therefore, there is no good indication of a severe breach of the normality assumption.
+
+
+---
+
+## (d) Selection and Justification of the Best Simple Linear Regression Model
+
+To provide a comprehensive basis for model selection, we also generate diagnostic plots for the remaining two models for comparison.
+
+```{r part3d_all_diagnostics, fig.width=12, fig.height=8, fig.cap=" Diagnostic plots for all three candidate models."}
+par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+
+# Residuals vs Fitted for all three models
+plot(model_temp, which = 1, id.n = 0, col = "steelblue", pch = 16,
+     main = "Temp: Residuals vs Fitted", caption = "", sub.caption = "")
+plot(model_wind, which = 1, id.n = 0, col = "darkorange", pch = 16,
+     main = "Wind: Residuals vs Fitted", caption = "", sub.caption = "")
+plot(model_solar, which = 1, id.n = 0, col = "forestgreen", pch = 16,
+     main = "Solar: Residuals vs Fitted", caption = "", sub.caption = "")
+
+# Q-Q plots for all three models
+plot(model_temp, which = 2, id.n = 0, col = "steelblue", pch = 16,
+     main = "Temp: Normal Q-Q", caption = "", sub.caption = "")
+plot(model_wind, which = 2, id.n = 0, col = "darkorange", pch = 16,
+     main = "Wind: Normal Q-Q", caption = "", sub.caption = "")
+plot(model_solar, which = 2, id.n = 0, col = "forestgreen", pch = 16,
+     main = "Solar: Normal Q-Q", caption = "", sub.caption = "")
+```
+
+### Recommended Model
+
+The simple linear regression model that involves **Temperature** as the predictor out of the three candidate models is suggested to be the most suitable model to predict the levels of Ozone.
+
+
+### Evidence Supporting the Temperature Model
+
+**1. Strongest linear association:** Temperature shows the most evident upward linear trend with Ozone, the data points being more or less concentrated around a straight pattern. The Pearson correlation coefficient quantitatively supports this visual observation: it is the highest in magnitude of the three predictors ($r = `r round(cor_temp, 3)`$). Moreover, the hypothesis test Part 2(b) supported the claim that this relationship is statistically significant ( $p = 0.00678$).
+
+**2. Best model fit metrics:** The Temperature model has the highest $R^2$ (`r round(summary(model_temp)$r.squared, 4)`) and Adjusted $R^2$ (`r round(summary(model_temp)$adj.r.squared, 4)`), meaning it explains the greatest proportion of variation in Ozone. It also has the lowest RSE (`r round(summary(model_temp)$sigma, 3)`), which means that it has the least average prediction errors out of the three models.
+
+**3. Satisfactory diagnostic results:** As explained in Part 3(c), the plot of Residuals vs Fitted indicates that there are no residual values systematic pattern, which means that the assumptions of linearity and constant variance are reasonably satisfied. The Q-Q plot indicates potential normality, but with only slight tail deviations.
+
+**4. Statistical significance:** The F-statistic of the model is 7.885 with a p-value of 0.00678 which is strong data that the regression relationship has a statistically significant meaning. This is contrary to the other two models,which both have non-significant p-values (> 0.05).
+
+
+### Strengths of the Temperature Model
+
+- It captures a consistent and statistically significant linear relationship with Ozone.
+- It has the highest explanatory power and lowest prediction error among the three candidates.
+- The key regression assumptions (linearity, constant variance, normality) are reasonably satisfied.
+- The model is interpretable and practically meaningful for the city council's purposes.
+
+### Weaknesses of the Temperature Model
+
+- The $R^2$ value, highest of the three models is, nonetheless, modest (around 0.12), implying that about 88% of the variation in Ozone cannot be attributed to Temperature alone.
+- There are minor normality violations in the tails, as indicated by the Q-Q plot, so predictions about extreme values may be less reliable.
+- It is a single-predictor model and therefore omits other environmental factors that could have an effect on Ozone (e.g., humidity, traffic patterns, atmospheric chemistry).
+- The strictly linear assumption may also be too simple for the actual Temperature and Ozone relationship at extreme temperatures.
+
+
+### Rejection of the Wind Speed Model
+
+The Wind Speed model is abandoned due to a number of reasons. Visually, the scatterplot (Figure 3) shows a scattered pattern with no obvious or strong linear trend, indicating a weak relationship. This is confirmed by the smallest-magnitude Pearson correlation ($r = `r round(cor_wind, 3)`$). The model is lowest in terms of $R^2$(`r round(summary(model_wind)$r.squared, 4)`) and Adjusted $R^2$ (`r round(summary(model_wind)$adj.r.squared, 4)`), which tells us that it is a very small variation in Ozone that is being explained. It also has the largest RSE of the three models (`r round(summary(model_wind)$sigma, 3)`), and its p-value (`r round(model_comparison$P_value[2], 3)`) is greater than 0.05, meaning the regression is not significant. Although the diagnostic plots do not indicate any serious assumption violations, satisfying the assumptions does not make a model useful when it lacks explanatory power, as this one does.
+
+
+### Rejection of the Solar Radiation Model
+
+The main reason why the Solar Radiation model is not accepted is that the assumption of linearity is not met. As shown in Part 1(e), the LOESS curve does not follow the linear regression line significantly indicating a non-linear relationship between Solar Radiation and Ozone. The fitted plot vs residuals (Figure 7, right column) demonstrates apparent curvature, additional evidence of this violation. As we have seen in Part 2(c), Pearson’s correlation is not reliable in the case of non-linear relationships, and thus even the weak positive correlation ($r = `r round(cor_solar, 3)`$) fails to reliably support a linear model. Additionally, the model has a low $R^2$(`r round(summary(model_solar)$r.squared, 4)`) and a non-significant p-value of 0.117, indicating weak explanatory power. A model that does not satisfy the basic linearity assumption cannot be used to make valid inferences or predictions.
+
+
+### Conclusion
+
+In general, the Temperature model has the best evidence in linear association, model fit, conformity to assumptions, and statistical significance. It is thus suggested as the most appropriate simple linear regression model for the Riverside city council to predict ground-level ozone levels.
+
+---
+
+# Part 4: Final Model Interpretation and Prediction
+
+## (a) Summary Output of the Final Chosen Model
+
+```{r part4a}
+final_model <- lm(Ozone ~ Temperature, data = air)
+summary(final_model)
+```
+
+---
+
+## (b) Fitted Regression Equation and Interpretation
+
+```{r part4b}
+coefs <- coef(final_model)
+cat("Intercept:", round(coefs[1], 4), "\n")
+cat("Slope (Temperature):", round(coefs[2], 4), "\n")
+```
+
+The fitted simple linear regression equation is:
+
+$$\hat{Ozone} = `r round(coefs[1], 4)` + `r round(coefs[2], 4)` \times Temperature$$
+
+**Interpretation of the Slope:** Each one-unit increase in Temperature (i.e., a 1-degree increase) is associated with an estimated rise in Ozone concentration of about `r round(coefs[2], 4)` units. The positive value of this coefficient conforms to the established principle of atmospheric chemistry that increased temperatures encourage the photochemical reactions which give rise to ground-level ozone. In practical terms, the city council can expect ozone levels to be generally higher on hotter days.
+
+
+**Interpretation of the Intercept:** The intercept value of `r round(coefs[1], 4)` estimates the Ozone concentration that was predicted where Temperature=0 F. But this explanation does not make sense in real-life scenario of
+this study, for two reasons:
+1. The value of 0F is way out of the range of temperatures observed in the dataset (which ranges from `r min(air$Temperature)`F to `r max(air$Temperature)`F).
+2. It would be extrapolating the model at 0F - taking the model beyond the data built it up, assuming that the linear relationship persists outside the observed data, which may not be valid.
+
+
+---
+
+## (c) Prediction for Specific Temperature Values
+
+```{r part4c}
+# Check the observed range of Temperature
+temp_range <- range(air$Temperature)
+cat("Observed Temperature range:", temp_range[1], "to", temp_range[2], "F\n\n")
+```
+
+### Scenario A: Temperature = 82F
+
+Since 82F falls **within** the observed range of temperatures (`r temp_range[1]`F to `r temp_range[2]`F), it is appropriate to use the model for prediction.
+
+```{r part4c_scenA}
+scenario_A <- data.frame(Temperature = 82)
+pred_A <- predict(final_model, newdata = scenario_A, interval = "prediction", level = 0.95)
+pred_A
+```
+
+The predicted ozone concentration for a day with a Temperature of 82F is **`r round(pred_A[1, "fit"], 2)`**. The 95% prediction interval is (**`r round(pred_A[1, "lwr"], 2)`**, **`r round(pred_A[1, "upr"], 2)`**).
+
+This means we can be 95% confident that the actual Ozone concentration on any individual day with a Temperature of 82F will fall between `r round(pred_A[1, "lwr"], 2)` and `r round(pred_A[1, "upr"], 2)`. The width of this interval reflects the inherent variability in ozone levels --- even on days with the same temperature, ozone can vary considerably due to other factors not captured by this single-predictor model.
+
+### Scenario B: Temperature = 90F
+
+```{r part4c_scenB}
+cat("Maximum observed Temperature:", max(air$Temperature), "F\n")
+cat("Scenario B Temperature: 90F\n")
+cat("Is 90F within the observed range?", 90 >= temp_range[1] & 90 <= temp_range[2], "\n")
+```
+
+A Temperature of 90F lies **within** the observed range (`r temp_range[1]`F to `r temp_range[2]`F), so predicting at this value is interpolation rather than extrapolation, and it is appropriate to use the model. However, 90F is near the upper edge of the data: only `r sum(air$Temperature > 90)` days were warmer than 90F, so very few observations support the model in this region and the prediction should be treated with caution.
+
+```{r part4c_scenB_pred}
+scenario_B <- data.frame(Temperature = 90)
+pred_B <- predict(final_model, newdata = scenario_B, interval = "prediction", level = 0.95)
+pred_B
+```
+
+The predicted ozone concentration for a day with a Temperature of 90F is **`r round(pred_B[1, "fit"], 2)`**, with a 95% prediction interval of (**`r round(pred_B[1, "lwr"], 2)`**, **`r round(pred_B[1, "upr"], 2)`**). This interval is slightly wider than the one for 82F because 90F is further from the mean temperature. The relationship may also behave differently at the hottest temperatures (for example, the rate of ozone production could speed up or level off because of atmospheric chemistry processes), which a simple linear model cannot capture.
+

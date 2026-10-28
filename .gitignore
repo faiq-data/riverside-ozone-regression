@@ -1,0 +1,8 @@
+.Rhistory
+.RData
+.Rproj.user/
+*_files/
+*.log
+*.aux
+*.tex
+.DS_Store
